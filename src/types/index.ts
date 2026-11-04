@@ -19,11 +19,14 @@ export interface Batch {
   id: string;
   productId: string;
   batchNumber: string;
+  customBarcode?: string;     // Legacy/unified barcode field
+  originalBarcode?: string;   // Physical 1D manufacturer barcode (e.g. EAN-13, UPC)
+  originalQrCode?: string;    // Physical 2D manufacturer QR or DataMatrix code
   manufacturingDate: string; // YYYY-MM-DD
   expiryDate: string;        // YYYY-MM-DD
   initialQuantity: number;
   currentQuantity: number;
-  unit: 'KG' | 'LITRE' | 'PACKET' | 'BOTTLE' | 'BAG';
+  unit: 'UNITS' | 'PIECES' | 'PACKET' | 'BOTTLE' | 'BAG' | 'KG' | 'LITRE';
   costPrice: number;         // Hidden from Worker role
   retailPrice: number;       // MRP
   supplierId: string;
@@ -39,6 +42,9 @@ export interface Product {
   name: string;
   brand: string;
   type: ProductType;
+  customBarcode?: string;      // Legacy/unified barcode field
+  originalBarcode?: string;    // Physical 1D manufacturer barcode (e.g. EAN-13, UPC)
+  originalQrCode?: string;     // Physical 2D manufacturer QR or DataMatrix code
   activeIngredient: string; // e.g. "Chlorpyrifos 50% + Cypermethrin 5% EC"
   toxicityClass: ToxicityClass;
   governmentLicenseNo: string; // CIB&RC or Seed Dealer Lic
@@ -203,3 +209,80 @@ export interface QRPayload {
   lic: string;            // Lic No
   tox: ToxicityClass;     // Toxicity Category
 }
+
+export type ScannedCodeFormat = 
+  | 'QR_CODE' 
+  | 'BARCODE_1D' 
+  | 'GS1_DATAMATRIX' 
+  | 'MANUFACTURER_URL' 
+  | 'ALPHANUMERIC_TEXT' 
+  | 'INTERNAL_JSON';
+
+export interface DetectedCodeInfo {
+  rawCode: string;
+  codeFormat: ScannedCodeFormat;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  
+  // Detected fields
+  batchNumber?: string;
+  brandOrCompany?: string;
+  productName?: string;
+  productIdOrGtin?: string;
+  serialNumber?: string;
+  barcodeNumber?: string;
+  manufacturingDate?: string;
+  expiryDate?: string;
+  retailPrice?: number;
+  activeIngredient?: string;
+  websiteUrl?: string;
+
+  // Breakdown for transparency
+  detectedFields: string[];     // E.g. ['Batch Number', 'Expiry Date', 'GTIN']
+  unidentifiedFields: string[]; // E.g. ['Company Name', 'Manufacturing Date']
+  rawFormatDescription: string;
+  isUrl: boolean;
+  isUrlSafeToDisplay: boolean;
+}
+
+export interface ProductMatchCandidate {
+  product: Product;
+  batch?: Batch;
+  matchReason: string;
+  matchScore: number; // 0 - 100
+}
+
+export interface ProductMatchResult {
+  status: 'EXACT_MATCH' | 'MULTIPLE_MATCHES' | 'NOT_FOUND';
+  matches: ProductMatchCandidate[];
+  detectedInfo: DetectedCodeInfo;
+}
+
+export interface ScanHistoryEntry {
+  id: string;
+  timestamp: string;
+  rawCode: string;
+  codeFormat: ScannedCodeFormat;
+  detectedSummary: string;
+  status: 'EXACT_MATCH' | 'MULTIPLE_MATCHES' | 'NOT_FOUND';
+  matchedProductName?: string;
+  actionTaken?: 'ADDED_TO_CART' | 'LINKED_TO_PRODUCT' | 'CREATED_PRODUCT' | 'TESTED';
+}
+
+export interface ReportedScanIssue {
+  id: string;
+  timestamp: string;
+  rawCode: string;
+  manufacturerName?: string;
+  productName?: string;
+  expectedBatch?: string;
+  userFeedback: string;
+  status: 'LOGGED' | 'REVIEWED';
+}
+
+export interface ShopSettings {
+  shopName: string;
+  shopAddress: string;
+  shopPhone: string;
+}
+
+

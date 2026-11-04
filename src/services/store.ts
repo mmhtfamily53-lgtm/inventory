@@ -10,9 +10,14 @@ import {
   Invoice, 
   UserRole,
   CartItem,
-  PaymentMethod
+  PaymentMethod,
+  ProductType,
+  ProductMatchResult,
+  DetectedCodeInfo,
+  ShopSettings
 } from '../types';
 import { createQRPayload, generateBatchQRCodeDataUrl, getDaysUntilExpiration } from './qrHelper';
+import { analyzeScannedCode, matchDetectedCodeWithInventory, logScanToHistory } from './barcodeIntelligence';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'agropulse_live_prod_v4',
@@ -24,6 +29,7 @@ const STORAGE_KEYS = {
   LEAVES: 'agropulse_live_leaves_v4',
   INVOICES: 'agropulse_live_inv_v4',
   AUTH_SESSION: 'agropulse_auth_jwt_session_v4',
+  SHOP_SETTINGS: 'agropulse_shop_settings_v2',
 };
 
 export interface AuthSession {
@@ -64,6 +70,11 @@ class StoreService {
   private leaves: LeaveRequest[] = [];
   private invoices: Invoice[] = [];
   private currentSession: AuthSession | null = null;
+  private shopSettings: ShopSettings = {
+    shopName: 'AgroPulse Agro Chemicals & Seeds',
+    shopAddress: '',
+    shopPhone: '',
+  };
 
   constructor() {
     this.init();
@@ -73,6 +84,15 @@ class StoreService {
     try {
       const storedProds = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
       this.products = storedProds ? JSON.parse(storedProds) : [];
+
+      const storedSettings = localStorage.getItem(STORAGE_KEYS.SHOP_SETTINGS);
+      if (storedSettings) {
+        try {
+          this.shopSettings = JSON.parse(storedSettings);
+        } catch {
+          // keep defaults
+        }
+      }
 
       const storedSups = localStorage.getItem(STORAGE_KEYS.SUPPLIERS);
       this.suppliers = storedSups ? JSON.parse(storedSups) : [];
@@ -210,16 +230,12 @@ class StoreService {
       return matchPhone || matchEmail || matchUsername || matchPhoneNumeric;
     });
 
-    if (!found) {
-      return { success: false, error: 'User account not found. Please verify your username (HskingBohra5253), phone or email.' };
+    if (!found || found.pin !== cleanPin) {
+      return { success: false, error: 'Invalid username or PIN.' };
     }
 
     if (found.status === 'INACTIVE') {
-      return { success: false, error: 'Access Denied: This staff account has been deactivated by the store owner.' };
-    }
-
-    if (found.pin !== cleanPin) {
-      return { success: false, error: 'Invalid PIN. Please check your 4-digit code.' };
+      return { success: false, error: 'Access Denied: This account is inactive.' };
     }
 
     // Generate secure persistent session token
@@ -436,8 +452,8 @@ class StoreService {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    const payload = createQRPayload(product, newBatch);
-    newBatch.qrCodeDataUrl = await generateBatchQRCodeDataUrl(payload);
+    const qrSource = batchData.customBarcode || createQRPayload(product, newBatch);
+    newBatch.qrCodeDataUrl = await generateBatchQRCodeDataUrl(qrSource);
 
     product.batches.unshift(newBatch);
     this.saveProducts();
@@ -476,6 +492,350 @@ class StoreService {
     }
 
     return newBatch;
+  }
+
+  // --- Smart Code Matching Engine with Multi-Format Support ---
+  public smartMatchCode(scannedCode: string): ProductMatchResult {
+    const detected = analyzeScannedCode(scannedCode);
+    const result = matchDetectedCodeWithInventory(detected, this.products);
+
+    // Automatically log scan to persistent history
+    logScanToHistory({
+      rawCode: scannedCode,
+      codeFormat: detected.codeFormat,
+      detectedSummary: detected.detectedFields.join(', ') || 'Unclassified code',
+      status: result.status,
+      matchedProductName: result.matches[0]?.product.name,
+      actionTaken: result.status === 'EXACT_MATCH' ? 'ADDED_TO_CART' : undefined,
+    });
+
+    return result;
+  }
+
+  // --- Find Product or Batch by any external scanned Barcode or QR Code ---
+  public findProductOrBatchByCode(scannedCode: string): { product: Product; batch: Batch } | null {
+    if (!scannedCode) return null;
+    const matchResult = this.smartMatchCode(scannedCode);
+    if (matchResult.matches.length > 0) {
+      const top = matchResult.matches[0];
+      const batch = top.batch || top.product.batches.find(b => b.currentQuantity > 0) || top.product.batches[0];
+      if (batch) {
+        return { product: top.product, batch };
+      }
+    }
+    return null;
+  }
+
+  // --- Prevent Duplicate Code Registration ---
+  public checkDuplicateCode(
+    code: string, 
+    excludeProductId?: string, 
+    excludeBatchId?: string
+  ): { isDuplicate: boolean; matchedProductName?: string; matchedBatchNo?: string } {
+    if (!code || !code.trim()) return { isDuplicate: false };
+    const clean = code.trim().toLowerCase();
+
+    for (const p of this.products) {
+      if (excludeProductId && p.id === excludeProductId) continue;
+      if (
+        (p.originalBarcode && p.originalBarcode.toLowerCase() === clean) ||
+        (p.originalQrCode && p.originalQrCode.toLowerCase() === clean) ||
+        (p.customBarcode && p.customBarcode.toLowerCase() === clean)
+      ) {
+        return { isDuplicate: true, matchedProductName: `${p.name} (${p.brand})` };
+      }
+      for (const b of p.batches) {
+        if (excludeBatchId && b.id === excludeBatchId) continue;
+        if (
+          (b.originalBarcode && b.originalBarcode.toLowerCase() === clean) ||
+          (b.originalQrCode && b.originalQrCode.toLowerCase() === clean) ||
+          (b.customBarcode && b.customBarcode.toLowerCase() === clean)
+        ) {
+          return { 
+            isDuplicate: true, 
+            matchedProductName: `${p.name} (${p.brand})`, 
+            matchedBatchNo: b.batchNumber 
+          };
+        }
+      }
+    }
+    return { isDuplicate: false };
+  }
+
+  // --- Link Manufacturer Codes (Barcode or QR) to a Product or Batch ---
+  public linkCodeToProduct(
+    productId: string, 
+    options: { barcode?: string; qrCode?: string; batchId?: string }
+  ): boolean {
+    const product = this.products.find(p => p.id === productId);
+    if (!product) return false;
+
+    if (options.barcode !== undefined) {
+      const cleanBar = options.barcode.trim();
+      product.originalBarcode = cleanBar || undefined;
+      product.customBarcode = cleanBar || product.customBarcode;
+    }
+    if (options.qrCode !== undefined) {
+      const cleanQr = options.qrCode.trim();
+      product.originalQrCode = cleanQr || undefined;
+      if (!product.customBarcode) {
+        product.customBarcode = cleanQr || undefined;
+      }
+    }
+
+    if (options.batchId) {
+      const batch = product.batches.find(b => b.id === options.batchId);
+      if (batch) {
+        if (options.barcode !== undefined) {
+          const cleanBar = options.barcode.trim();
+          batch.originalBarcode = cleanBar || undefined;
+          batch.customBarcode = cleanBar || batch.customBarcode;
+        }
+        if (options.qrCode !== undefined) {
+          const cleanQr = options.qrCode.trim();
+          batch.originalQrCode = cleanQr || undefined;
+          if (!batch.customBarcode) {
+            batch.customBarcode = cleanQr || undefined;
+          }
+        }
+      }
+    } else if (product.batches.length > 0) {
+      // Default apply to primary batch
+      const b0 = product.batches[0];
+      if (options.barcode !== undefined) {
+        b0.originalBarcode = options.barcode.trim() || undefined;
+        b0.customBarcode = options.barcode.trim() || b0.customBarcode;
+      }
+      if (options.qrCode !== undefined) {
+        b0.originalQrCode = options.qrCode.trim() || undefined;
+        if (!b0.customBarcode) {
+          b0.customBarcode = options.qrCode.trim() || undefined;
+        }
+      }
+    }
+
+    this.saveProducts();
+    return true;
+  }
+
+  // Compatibility wrapper
+  public linkBarcodeToProduct(productId: string, barcode: string, batchId?: string): boolean {
+    return this.linkCodeToProduct(productId, { barcode, batchId });
+  }
+
+  // --- Simplified Quick Product Adding ---
+  // Mandatory: Name, Company, Retail Price, Quantity (numeric count)
+  // QR & Barcode = Completely Optional (never mandatory)
+  // Supports separate originalBarcode and originalQrCode
+  public async quickAddProduct(data: {
+    name: string;
+    company: string;
+    retailPrice: number;
+    quantity: number;
+    customBarcode?: string;
+    originalBarcode?: string;
+    originalQrCode?: string;
+    batchNumber?: string;
+    costPrice?: number;
+    type?: ProductType;
+    minStockThreshold?: number;
+    expiryDate?: string;
+    activeIngredient?: string;
+  }): Promise<{ product: Product; batch: Batch }> {
+    const cleanName = data.name.trim();
+    const cleanCompany = data.company.trim();
+    const cleanBarcode = data.originalBarcode?.trim() || data.customBarcode?.trim() || undefined;
+    const cleanQr = data.originalQrCode?.trim() || undefined;
+    const primaryCode = cleanBarcode || cleanQr || undefined;
+
+    const qty = Math.max(1, Math.round(data.quantity || 1));
+    const retail = Math.max(0, Number(data.retailPrice) || 0);
+    const cost = data.costPrice !== undefined ? Number(data.costPrice) : Math.round(retail * 0.8);
+    const minThreshold = data.minStockThreshold !== undefined ? Number(data.minStockThreshold) : 5;
+    const prodType = data.type || 'INSECTICIDE';
+    
+    // User-entered batch number or fallback
+    const userBatchNo = data.batchNumber?.trim() || `BATCH-${Date.now().toString().slice(-4)}`;
+
+    // Do not assume or invent synthetic expiry date
+    const productExpiry = data.expiryDate?.trim() || '';
+    const today = new Date().toISOString().split('T')[0];
+
+    // Check if product with same name and brand already exists
+    let existingProd = this.products.find(
+      p => p.name.toLowerCase() === cleanName.toLowerCase() && p.brand.toLowerCase() === cleanCompany.toLowerCase()
+    );
+
+    if (existingProd) {
+      if (cleanBarcode) existingProd.originalBarcode = cleanBarcode;
+      if (cleanQr) existingProd.originalQrCode = cleanQr;
+      if (primaryCode && !existingProd.customBarcode) existingProd.customBarcode = primaryCode;
+
+      const newBatch: Batch = {
+        id: `batch-${Date.now().toString().slice(-6)}`,
+        productId: existingProd.id,
+        batchNumber: userBatchNo,
+        customBarcode: primaryCode,
+        originalBarcode: cleanBarcode,
+        originalQrCode: cleanQr,
+        manufacturingDate: today,
+        expiryDate: productExpiry,
+        initialQuantity: qty,
+        currentQuantity: qty,
+        unit: 'UNITS',
+        costPrice: cost,
+        retailPrice: retail,
+        supplierId: 'sup-direct',
+        supplierInvoiceNo: `INV-${Date.now().toString().slice(-4)}`,
+        createdAt: today,
+      };
+
+      const qrSource = cleanQr || cleanBarcode || createQRPayload(existingProd, newBatch);
+      newBatch.qrCodeDataUrl = await generateBatchQRCodeDataUrl(qrSource);
+
+      existingProd.batches.unshift(newBatch);
+      this.saveProducts();
+      return { product: existingProd, batch: newBatch };
+    }
+
+    // Create new product with clean defaults
+    const newProduct: Product = {
+      id: `prod-${Date.now().toString().slice(-6)}`,
+      name: cleanName,
+      brand: cleanCompany,
+      type: prodType,
+      customBarcode: primaryCode,
+      originalBarcode: cleanBarcode,
+      originalQrCode: cleanQr,
+      activeIngredient: data.activeIngredient?.trim() || `${cleanName} active formulation`,
+      toxicityClass: 'YELLOW',
+      governmentLicenseNo: 'REG-RETAIL-01',
+      minStockThreshold: minThreshold,
+      gstRate: 18,
+      hsnCode: '38089190',
+      description: `Stock item: ${cleanName} by ${cleanCompany}`,
+      batches: [],
+    };
+
+    const newBatch: Batch = {
+      id: `batch-${Date.now().toString().slice(-6)}`,
+      productId: newProduct.id,
+      batchNumber: userBatchNo,
+      customBarcode: primaryCode,
+      originalBarcode: cleanBarcode,
+      originalQrCode: cleanQr,
+      manufacturingDate: today,
+      expiryDate: productExpiry,
+      initialQuantity: qty,
+      currentQuantity: qty,
+      unit: 'UNITS',
+      costPrice: cost,
+      retailPrice: retail,
+      supplierId: 'sup-direct',
+      supplierInvoiceNo: `INV-${Date.now().toString().slice(-4)}`,
+      createdAt: today,
+    };
+
+    const qrSource = cleanQr || cleanBarcode || createQRPayload(newProduct, newBatch);
+    newBatch.qrCodeDataUrl = await generateBatchQRCodeDataUrl(qrSource);
+
+    newProduct.batches.push(newBatch);
+    this.products.unshift(newProduct);
+    this.saveProducts();
+
+    return { product: newProduct, batch: newBatch };
+  }
+
+  // --- Quick Adjust Stock (+ or -) ---
+  public quickAdjustStock(
+    productId: string, 
+    batchId: string | undefined, 
+    deltaQuantity: number, 
+    reason?: string
+  ): { success: boolean; newQuantity: number; productName: string } {
+    const product = this.products.find(p => p.id === productId);
+    if (!product) {
+      throw new Error('Product not found.');
+    }
+
+    let targetBatch = batchId ? product.batches.find(b => b.id === batchId) : product.batches[0];
+
+    // If product has no batches and delta > 0, create a default batch
+    if (!targetBatch) {
+      if (deltaQuantity <= 0) {
+        throw new Error('Cannot subtract stock from product with 0 units.');
+      }
+      const today = new Date().toISOString().split('T')[0];
+      const futureExpiry = new Date(Date.now() + 730 * 86400000).toISOString().split('T')[0];
+      targetBatch = {
+        id: `batch-${Date.now().toString().slice(-6)}`,
+        productId: product.id,
+        batchNumber: `BATCH-${Date.now().toString().slice(-4)}`,
+        customBarcode: product.customBarcode,
+        manufacturingDate: today,
+        expiryDate: futureExpiry,
+        initialQuantity: deltaQuantity,
+        currentQuantity: deltaQuantity,
+        unit: 'UNITS',
+        costPrice: 0,
+        retailPrice: 100,
+        supplierId: 'sup-direct',
+        supplierInvoiceNo: 'ADJUST',
+        createdAt: today,
+      };
+      product.batches.push(targetBatch);
+      this.saveProducts();
+      return { success: true, newQuantity: deltaQuantity, productName: product.name };
+    }
+
+    if (targetBatch.currentQuantity + deltaQuantity < 0) {
+      throw new Error(`Cannot deduct ${Math.abs(deltaQuantity)} units. Only ${targetBatch.currentQuantity} units available in stock.`);
+    }
+
+    targetBatch.currentQuantity += deltaQuantity;
+    if (deltaQuantity > 0) {
+      targetBatch.initialQuantity = Math.max(targetBatch.initialQuantity, targetBatch.currentQuantity);
+    }
+
+    this.saveProducts();
+
+    const totalProductStock = product.batches.reduce((sum, b) => sum + b.currentQuantity, 0);
+    return { success: true, newQuantity: totalProductStock, productName: product.name };
+  }
+
+  // --- Low Stock Tracker ---
+  public getLowStockProducts(): { 
+    product: Product; 
+    totalStock: number; 
+    minThreshold: number; 
+    isOutOfStock: boolean; 
+    isLowStock: boolean;
+  }[] {
+    const list: { 
+      product: Product; 
+      totalStock: number; 
+      minThreshold: number; 
+      isOutOfStock: boolean; 
+      isLowStock: boolean;
+    }[] = [];
+
+    for (const prod of this.products) {
+      const totalStock = prod.batches.reduce((sum, b) => sum + b.currentQuantity, 0);
+      const isOutOfStock = totalStock === 0;
+      const isLowStock = totalStock > 0 && totalStock <= prod.minStockThreshold;
+
+      if (isOutOfStock || isLowStock) {
+        list.push({
+          product: prod,
+          totalStock,
+          minThreshold: prod.minStockThreshold,
+          isOutOfStock,
+          isLowStock,
+        });
+      }
+    }
+
+    return list.sort((a, b) => a.totalStock - b.totalStock);
   }
 
   public updateBatchStock(batchId: string, deltaQuantity: number): boolean {
@@ -517,10 +877,6 @@ class StoreService {
       }
       if (found.batch.currentQuantity < item.quantity) {
         throw new Error(`Out of stock error: Batch ${item.batch.batchNumber} has only ${found.batch.currentQuantity} units available.`);
-      }
-      const daysLeft = getDaysUntilExpiration(found.batch.expiryDate);
-      if (daysLeft < 0) {
-        throw new Error(`Compliance Violation: Batch ${item.batch.batchNumber} of ${found.product.name} expired on ${found.batch.expiryDate}. Government regulations prohibit sale of expired pesticides/seeds.`);
       }
     }
 
@@ -566,9 +922,9 @@ class StoreService {
       date: new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }),
       cashierId: currentUser.id,
       cashierName: currentUser.name,
-      customerName: customerName || 'Walk-in Customer',
-      customerPhone: customerPhone || 'N/A',
-      customerVillage: customerVillage || 'Local',
+      customerName: customerName?.trim() || '',
+      customerPhone: customerPhone?.trim() || '',
+      customerVillage: customerVillage?.trim() || '',
       farmerId,
       items: invoiceItems,
       subtotal: Number(subtotal.toFixed(2)),
@@ -763,6 +1119,24 @@ class StoreService {
     leave.status = status;
     this.saveLeaves();
     return true;
+  }
+
+  // --- Business Shop Settings (Name, Address, Actual Contact Phone) ---
+  public getShopSettings(): ShopSettings {
+    return { ...this.shopSettings };
+  }
+
+  public updateShopSettings(settings: Partial<ShopSettings>): ShopSettings {
+    this.shopSettings = {
+      ...this.shopSettings,
+      ...settings,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEYS.SHOP_SETTINGS, JSON.stringify(this.shopSettings));
+    } catch (e) {
+      console.warn('Failed to save shop settings:', e);
+    }
+    return { ...this.shopSettings };
   }
 }
 

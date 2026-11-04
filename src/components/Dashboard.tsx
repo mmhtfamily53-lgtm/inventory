@@ -14,16 +14,20 @@ import {
   Lock,
   ChevronRight,
   TrendingUp,
-  FileText
+  FileText,
+  Plus,
+  Package
 } from 'lucide-react';
 import { Product, Batch, Invoice, UserRole } from '../types';
 import { store } from '../services/store';
 import { getDaysUntilExpiration, getToxicityDisplay } from '../services/qrHelper';
-import { ActiveTab } from './Navbar';
+import { ActiveTab } from './Sidebar';
 
 interface DashboardProps {
   onNavigate: (tab: ActiveTab) => void;
   onOpenNewBatchModal: () => void;
+  onOpenQuickAdd: () => void;
+  onOpenStockAdjust: (productId?: string) => void;
   onOpenStickerModal: (product?: Product, batch?: Batch) => void;
   onViewInvoice: (invoice: Invoice) => void;
   currentRole: UserRole;
@@ -32,6 +36,8 @@ interface DashboardProps {
 export const Dashboard: React.FC<DashboardProps> = ({
   onNavigate,
   onOpenNewBatchModal,
+  onOpenQuickAdd,
+  onOpenStockAdjust,
   onOpenStickerModal,
   onViewInvoice,
   currentRole,
@@ -40,23 +46,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const invoices = store.getInvoices();
   const suppliers = store.getSuppliers();
   const farmers = store.getFarmers();
+  const lowStockList = store.getLowStockProducts();
 
   // Aggregate batch statistics
   const allBatches: { product: Product; batch: Batch; daysLeft: number }[] = [];
   let totalStockCount = 0;
-  let lowStockProductsCount = 0;
 
   products.forEach(p => {
-    let productTotalStock = 0;
     p.batches.forEach(b => {
       totalStockCount += b.currentQuantity;
-      productTotalStock += b.currentQuantity;
       const daysLeft = getDaysUntilExpiration(b.expiryDate);
       allBatches.push({ product: p, batch: b, daysLeft });
     });
-    if (productTotalStock <= p.minStockThreshold) {
-      lowStockProductsCount++;
-    }
   });
 
   // Expired and Expiring Batches
@@ -74,67 +75,161 @@ export const Dashboard: React.FC<DashboardProps> = ({
   return (
     <div className="space-y-6">
       
-      {/* Top Banner / Role Notice */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-white rounded-xl border border-slate-200">
+      {/* Top Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white rounded-2xl border border-slate-200 shadow-xs">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+            <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">
               Operational Command Center
             </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
               Active Season: Rabi 2024-25
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Real-time compliance monitoring for seed germination certificates and CIB&amp;RC pesticide batches.
+          <p className="text-xs text-slate-500 mt-1">
+            Real-time compliance monitoring, dynamic barcode tracking, and automated stock deduction.
           </p>
         </div>
 
         {/* Quick Action Strip */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => onNavigate('pos')}
-            className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 shadow-sm transition-colors"
+            onClick={onOpenQuickAdd}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98]"
           >
-            <ScanLine className="w-4 h-4" />
-            <span>Launch POS Scanner</span>
+            <PlusCircle className="w-4 h-4" />
+            <span>+ Add Product</span>
           </button>
-          
-          {currentRole === 'ADMIN' && (
-            <button
-              onClick={onOpenNewBatchModal}
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 border border-slate-200 transition-colors"
-            >
-              <PlusCircle className="w-4 h-4 text-slate-600" />
-              <span>Inbound Stock QR</span>
-            </button>
-          )}
 
           <button
-            onClick={() => onOpenStickerModal()}
-            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 border border-slate-200 transition-colors"
+            onClick={() => onNavigate('pos')}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 border border-slate-200 transition-colors"
           >
-            <Printer className="w-4 h-4 text-slate-600" />
-            <span>Batch Stickers</span>
+            <ScanLine className="w-4 h-4 text-slate-600" />
+            <span>POS Billing</span>
+          </button>
+          
+          <button
+            onClick={() => onOpenStockAdjust()}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 border border-slate-200 transition-colors"
+          >
+            <span>+/- Adjust Stock</span>
           </button>
         </div>
       </div>
 
       {/* Role Restriction Banner if Worker */}
       {currentRole === 'WORKER' && (
-        <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-xs">
+        <div className="flex items-center gap-3 p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs">
           <Lock className="w-4 h-4 text-blue-600 shrink-0" />
           <div>
-            <span className="font-semibold">Worker / Cashier Session Active:</span> Financial margins, wholesale supplier purchase prices, and company balance sheets are masked under security policy. POS billing, customer ledger updates, and dynamic QR verification remain fully enabled.
+            <span className="font-bold">Worker / Cashier Session Active:</span> Financial wholesale costs, supplier balance sheets, and store margins are masked. POS billing, barcode scanning, and inventory stock views remain active.
           </div>
         </div>
       )}
+
+      {/* DEDICATED LOW STOCK TRACKER NOTIFICATION PANEL */}
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+        <div className={`p-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+          lowStockList.length > 0 ? 'bg-rose-50/80 border-rose-200' : 'bg-slate-50/60 border-slate-200'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+              lowStockList.length > 0 ? 'bg-rose-600 text-white shadow-sm' : 'bg-emerald-100 text-emerald-800'
+            }`}>
+              {lowStockList.length > 0 ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm font-extrabold text-slate-900">
+                  Low Stock &amp; Reorder Notification Tracker
+                </h2>
+                {lowStockList.length > 0 ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black uppercase bg-rose-600 text-white shadow-xs">
+                    {lowStockList.length} Products Below Safe Threshold
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                    All Inventory Healthy
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Automatically monitors all inventory items and triggers reorder notices when stock dips below threshold.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => onOpenStockAdjust()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 shadow-2xs transition-colors self-start sm:self-auto"
+          >
+            <Plus className="w-3.5 h-3.5 text-emerald-600" />
+            <span>+/- Adjust Stock</span>
+          </button>
+        </div>
+
+        {lowStockList.length > 0 ? (
+          <div className="divide-y divide-slate-100">
+            {lowStockList.map(({ product, totalStock, minThreshold, isOutOfStock }) => (
+              <div key={product.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/80 transition-colors">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-extrabold text-slate-900">
+                      {product.name} ({product.brand})
+                    </span>
+                    <span className="text-xs font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                      Stock: {totalStock} units
+                    </span>
+                    {isOutOfStock ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white animate-pulse">
+                        Out of Stock (0 units)
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-300">
+                        Low Stock Warning ({totalStock} units left)
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500 flex items-center gap-2 flex-wrap">
+                    <span>Active: {product.activeIngredient}</span>
+                    <span>·</span>
+                    <span className="font-semibold text-rose-700">Minimum Safe Threshold: {minThreshold} units</span>
+                    {product.customBarcode && (
+                      <>
+                        <span>·</span>
+                        <span className="font-mono text-slate-600">Barcode: {product.customBarcode}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => onOpenStockAdjust(product.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Restock Units</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-6 text-center text-xs text-slate-500 flex flex-col items-center justify-center gap-1.5">
+            <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+            <span className="font-bold text-slate-800">All registered items are above minimum stock thresholds.</span>
+            <span>When stock dips below threshold, red warning badges and restock shortcuts will appear here automatically.</span>
+          </div>
+        )}
+      </div>
 
       {/* Metric Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         
         {/* Metric 1: Revenue or Today's Sales Count */}
-        <div className="p-4 bg-white rounded-xl border border-slate-200">
+        <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium">
             <span>{currentRole === 'ADMIN' ? 'Total Sales Revenue' : 'Total Invoices Billed'}</span>
             <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -151,8 +246,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </p>
         </div>
 
-        {/* Metric 2: Expiry Risk Alert (Critical for Seeds/Pesticides) */}
-        <div className="p-4 bg-white rounded-xl border border-slate-200">
+        {/* Metric 2: Expiry Risk Alert */}
+        <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium">
             <span>Chemical &amp; Seed Expiry Alert</span>
             <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
@@ -175,28 +270,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Metric 3: Low Stock Alerts */}
-        <div className="p-4 bg-white rounded-xl border border-slate-200">
+        <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium">
-            <span>Inventory Thresholds</span>
+            <span>Live Stock Count</span>
             <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <Clock className="w-4 h-4" />
+              <Package className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold font-mono tabular-nums text-slate-900">
-              {lowStockProductsCount} Products
+              {totalStockCount} Units
             </span>
-            <span className="text-xs text-slate-500">
-              ({totalStockCount} units live)
+            <span className="text-xs text-slate-500 font-medium">
+              ({products.length} Products)
             </span>
           </div>
           <p className="text-[11px] text-slate-500 mt-1">
-            Reorder triggered based on seasonal surge
+            {lowStockList.length > 0 ? `${lowStockList.length} items need restock` : 'Stock healthy across store'}
           </p>
         </div>
 
         {/* Metric 4: Farmer Khata Debt Ledger */}
-        <div className="p-4 bg-white rounded-xl border border-slate-200">
+        <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-medium">
             <span>{currentRole === 'ADMIN' ? 'Farmer Khata (Receivables)' : 'Farmer Khata Accounts'}</span>
             <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center">
@@ -214,7 +309,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             )}
           </div>
           <p className="text-[11px] text-slate-500 mt-1">
-            {currentRole === 'ADMIN' ? 'Pending post-harvest recovery register' : 'Customer credit verification active'}
+            {currentRole === 'ADMIN' ? 'Pending customer credit recovery' : 'Customer credit verification active'}
           </p>
         </div>
 
@@ -223,17 +318,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
       {/* Two Column Section: Expiration Radar & Recent Invoices */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Left Column (2 spans): Batch Expiration Radar */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        {/* Left Column (2 spans): Active Inventory Stock Overview */}
+        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-5 space-y-4 shadow-2xs">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ShieldAlert className="w-5 h-5 text-amber-600" />
+              <Package className="w-5 h-5 text-emerald-600" />
               <div>
                 <h2 className="text-sm font-bold text-slate-900">
-                  Chemical &amp; Seed Expiration Radar
+                  Active Inventory &amp; Stock Levels
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Batches nearing chemical efficacy or seed germination degradation
+                  Current stock counts, company brands, and selling prices
                 </p>
               </div>
             </div>
@@ -241,7 +336,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               onClick={() => onNavigate('inventory')}
               className="text-xs text-emerald-700 hover:text-emerald-800 font-semibold flex items-center gap-1"
             >
-              <span>View All Batches</span>
+              <span>View All Inventory</span>
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -250,68 +345,75 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-slate-500 uppercase tracking-wider text-[11px]">
-                  <th className="py-2.5 px-3 font-semibold">Product &amp; Active Ingredient</th>
-                  <th className="py-2.5 px-3 font-semibold">Batch No.</th>
-                  <th className="py-2.5 px-3 font-semibold">Available</th>
-                  <th className="py-2.5 px-3 font-semibold">Expiry Date</th>
-                  <th className="py-2.5 px-3 font-semibold">Status / Days</th>
-                  <th className="py-2.5 px-3 font-semibold text-right">Action</th>
+                  <th className="py-2.5 px-3 font-semibold">Product Name &amp; Company</th>
+                  <th className="py-2.5 px-3 font-semibold text-center">In-Store Stock</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Selling Price</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {urgentBatches.map(({ product, batch, daysLeft }) => {
-                  const tox = getToxicityDisplay(product.toxicityClass);
-                  const isExpired = daysLeft <= 0;
-                  const isNearExpiry = daysLeft > 0 && daysLeft <= 60;
+                {products.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-slate-400">
+                      No products added yet. Click "+ Add Product" to get started.
+                    </td>
+                  </tr>
+                ) : (
+                  products.slice(0, 6).map((product) => {
+                    const totalStock = product.batches.reduce((sum, b) => sum + b.currentQuantity, 0);
+                    const sampleBatch = product.batches[0];
 
-                  return (
-                    <tr key={batch.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3 px-3">
-                        <div className="font-semibold text-slate-900">{product.name}</div>
-                        <div className="text-[11px] text-slate-500">{product.activeIngredient}</div>
-                      </td>
-                      <td className="py-3 px-3 font-mono font-medium text-slate-700">
-                        {batch.batchNumber}
-                      </td>
-                      <td className="py-3 px-3 font-mono tabular-nums text-slate-800 font-medium">
-                        {batch.currentQuantity} {batch.unit}
-                      </td>
-                      <td className="py-3 px-3 font-mono text-slate-600">
-                        {batch.expiryDate}
-                      </td>
-                      <td className="py-3 px-3">
-                        {isExpired ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                            Expired ({Math.abs(daysLeft)}d ago)
+                    return (
+                      <tr key={product.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-3">
+                          <div className="font-bold text-slate-900">
+                            {product.name}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            by {product.brand} · {product.activeIngredient}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-mono font-bold text-xs ${
+                            totalStock === 0 
+                              ? 'bg-rose-100 text-rose-800' 
+                              : totalStock <= product.minStockThreshold 
+                              ? 'bg-amber-100 text-amber-800' 
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {totalStock} units
                           </span>
-                        ) : isNearExpiry ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                            {daysLeft} days left
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                            {daysLeft} days valid
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <button
-                          onClick={() => onOpenStickerModal(product, batch)}
-                          className="px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded transition-colors"
-                        >
-                          Print QR
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 text-sm">
+                          ₹{sampleBatch ? sampleBatch.retailPrice : '—'}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <button
+                            onClick={() => onOpenStockAdjust(product.id)}
+                            className="px-2.5 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors mr-1.5"
+                          >
+                            +/- Stock
+                          </button>
+                          {sampleBatch && (
+                            <button
+                              onClick={() => onOpenStickerModal(product, sampleBatch)}
+                              className="px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                            >
+                              Tag
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
         </div>
 
         {/* Right Column: Recent POS Invoices */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4 shadow-2xs">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileText className="w-5 h-5 text-slate-700" />
@@ -319,51 +421,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <h2 className="text-sm font-bold text-slate-900">
                   Recent POS Invoices
                 </h2>
-                <p className="text-xs text-slate-500">Live stock-out deductions</p>
+                <p className="text-xs text-slate-500">
+                  Live counter sales stream
+                </p>
               </div>
             </div>
             <button
               onClick={() => onNavigate('pos')}
               className="text-xs text-emerald-700 hover:text-emerald-800 font-semibold"
             >
-              New Bill
+              New Sale
             </button>
           </div>
 
-          <div className="space-y-3">
-            {invoices.slice(0, 5).map(inv => (
-              <div 
-                key={inv.id}
-                onClick={() => onViewInvoice(inv)}
-                className="p-3 bg-slate-50 hover:bg-slate-100/80 rounded-lg border border-slate-200/60 cursor-pointer transition-all"
-              >
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-mono font-bold text-slate-900">{inv.invoiceNumber}</span>
-                  <span className="font-mono font-bold text-slate-900 tabular-nums">₹{inv.grandTotal.toLocaleString()}</span>
-                </div>
-                <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1">
-                  <span>{inv.customerName} ({inv.customerVillage})</span>
-                  <span className="uppercase font-semibold text-emerald-700">{inv.paymentMethod}</span>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
-                  <span>{inv.items.length} items deducted</span>
-                  <span>{inv.date}</span>
-                </div>
+          <div className="space-y-2.5">
+            {invoices.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-400">
+                No invoices billed yet today.
               </div>
-            ))}
+            ) : (
+              invoices.slice(0, 5).map(inv => (
+                <div
+                  key={inv.id}
+                  onClick={() => onViewInvoice(inv)}
+                  className="p-3 bg-slate-50 hover:bg-emerald-50/50 rounded-xl border border-slate-200/80 cursor-pointer transition-colors space-y-1"
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono font-bold text-slate-900">{inv.invoiceNumber}</span>
+                    <span className="font-mono font-bold text-emerald-800 tabular-nums">
+                      ₹{inv.grandTotal.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <span>{inv.customerName}</span>
+                    <span className="font-mono uppercase px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 text-[10px]">
+                      {inv.paymentMethod}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
-
-          {currentRole === 'ADMIN' && (
-            <div className="pt-2 border-t border-slate-100">
-              <button
-                onClick={() => onNavigate('analytics')}
-                className="w-full py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-              >
-                <span>Open Advanced Analytics Hub</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
         </div>
 
       </div>

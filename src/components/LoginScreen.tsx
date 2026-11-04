@@ -31,7 +31,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       if (res.success && res.user) {
         onLoginSuccess(res.user, res.user.role);
       } else {
-        setError(res.error || 'Login failed. Please verify your phone number or username and 4-digit PIN.');
+        setError(res.error || 'Invalid username or PIN.');
       }
       setIsLoading(false);
     }, 200);

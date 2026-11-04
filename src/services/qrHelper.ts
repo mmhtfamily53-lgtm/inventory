@@ -22,10 +22,10 @@ export function createQRPayload(product: Product, batch: Batch): QRPayload {
 /**
  * Generates a dynamic QR Code Data URL (PNG) for rendering in UI and printable sticker sheets.
  */
-export async function generateBatchQRCodeDataUrl(payload: QRPayload): Promise<string> {
-  const jsonString = JSON.stringify(payload);
+export async function generateBatchQRCodeDataUrl(payloadOrText: QRPayload | string): Promise<string> {
+  const text = typeof payloadOrText === 'string' ? payloadOrText : JSON.stringify(payloadOrText);
   try {
-    return await QRCode.toDataURL(jsonString, {
+    return await QRCode.toDataURL(text, {
       errorCorrectionLevel: 'M',
       margin: 1,
       width: 256,
