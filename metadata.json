@@ -1,0 +1,7 @@
+{
+  "name": "AgroPulse - Agrochemical & Seed Retail ERP",
+  "description": "Production-grade retail enterprise management system for agrochemicals, pesticides, and seeds featuring dynamic batch QR codes, camera POS scanner, instant inventory deductions, RBAC worker mode, and farmer credit ledger.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
